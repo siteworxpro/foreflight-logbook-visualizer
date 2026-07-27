@@ -1,0 +1,16 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font: 14px/1.5 system-ui, -apple-system, sans-serif;
+  color: #1a1d21;
+  background: #eef1f4;
+}

@@ -1,0 +1,6 @@
+:80 {
+	root * /usr/share/caddy
+	# airports.json is ~940 KB of JSON that compresses to ~336 KB.
+	encode zstd gzip
+	file_server
+}

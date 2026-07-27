@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.idea
+.vscode
+
+# Build-time source only — public/airports.json is what ships.
+Airports.geojson
+
+# Logbooks are personal data and must never be baked into an image.
+*.csv
