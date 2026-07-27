@@ -23,6 +23,9 @@ docker run -p 8080:80 foreflight-logbook-visualizer
 
 Node builds it, Caddy serves it — 86 MB, no Node in the running image. Logbook CSVs are excluded from the build context: they are personal data and must never end up in an image.
 
+CI (`.gitea/workflows/build.yml`) runs tests and a type-checked build on every push and pull request. Pushing a `v*`
+tag additionally builds `scr.siteworxpro.com/foreflight-logbook-visualizer` for amd64 and arm64 and pushes it.
+
 ## Docs
 
 - [CONTEXT.md](./CONTEXT.md) — what the terms mean. Read this before changing derivation logic; the difference between a
