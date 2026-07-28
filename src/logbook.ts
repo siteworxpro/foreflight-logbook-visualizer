@@ -55,6 +55,21 @@ export type Flight = {
   approaches: { airport: string; name: string }[]
 }
 
+/**
+ * What a parse could not put on the map. Optional, because nothing derived needs it — it exists
+ * so the app can admit its totals are incomplete instead of quietly understating them.
+ */
+export type Dropped = {
+  /** Unresolved Identifiers, by how many flights wrote them. Navaids and typos land here alike. */
+  identifiers: Map<string, number>
+  /** Flights with no resolvable airport at all — simulator sessions and routeless entries. */
+  rows: number
+  /** Hours on those flights, absent from every total on screen. */
+  hours: number
+}
+
+export const noDrops = (): Dropped => ({ identifiers: new Map(), rows: 0, hours: 0 })
+
 export type Route = { a: string; b: string; count: number; hours: number; nm: number }
 export type AirportStat = {
   id: string
@@ -97,7 +112,11 @@ const reader = (header: string[]) => {
   return (row: string[], name: string) => row[index.get(name) ?? -1]?.trim() ?? ''
 }
 
-export function parseLogbook(text: string, db: AirportDb): Flight[] {
+/**
+ * `dropped` is an optional sink rather than a second return value: every caller that does not
+ * care about the losses — which is every test here — keeps the one-argument shape.
+ */
+export function parseLogbook(text: string, db: AirportDb, dropped?: Dropped): Flight[] {
   const lines = text.split(/\r?\n/)
   if (!lines[0]?.startsWith(MAGIC)) throw new Error('Not a ForeFlight logbook export')
 
@@ -108,15 +127,33 @@ export function parseLogbook(text: string, db: AirportDb): Flight[] {
   const flights = table(lines, 'Flights')
   const ft = reader(flights.header)
 
-  const resolve = (ids: string[]) =>
-    ids.map((id) => canonical(id, db)).filter((id): id is string => !!id)
+  // A blank cell is an empty column, not an identifier the pilot got wrong, so it never reports.
+  const resolve = (ids: string[], lost?: Set<string>) =>
+    ids.filter(Boolean).flatMap((id) => {
+      const hit = canonical(id, db)
+      if (hit) return [hit]
+      lost?.add(id)
+      return []
+    })
 
   return flights.rows.flatMap((row) => {
     // A Filed Route mixes airports with navaids and typos — keep only what resolves.
     // A stop repeated back-to-back is the same arrival written twice (`Route: FDK`, `To: KFDK`).
     const stops = ft(row, 'Route').split(/[\s,]+/)
-    const visits = resolve([...stops, ft(row, 'To')]).filter((id, i, all) => id !== all[i - 1])
-    const seq = resolve([ft(row, 'From')]).concat(visits)
+    // Per row, so an identifier written twice on one flight counts as one flight, not two.
+    const lost = dropped && new Set<string>()
+    const visits = resolve([...stops, ft(row, 'To')], lost).filter((id, i, all) => id !== all[i - 1])
+    const seq = resolve([ft(row, 'From')], lost).concat(visits)
+    const hours = Number(ft(row, 'TotalTime')) || 0
+
+    if (dropped) {
+      // Recorded even when the row survives: a typo'd stop costs a leg on a flight that still draws.
+      for (const id of lost!) dropped.identifiers.set(id, (dropped.identifiers.get(id) ?? 0) + 1)
+      if (!seq.length) {
+        dropped.rows++
+        dropped.hours += hours
+      }
+    }
     if (!seq.length) return []
 
     // ForeFlight packs an approach as `count;name;runway;airport;;`.
@@ -131,7 +168,7 @@ export function parseLogbook(text: string, db: AirportDb): Flight[] {
         date: ft(row, 'Date'),
         tail,
         type: types.get(tail) ?? '',
-        hours: Number(ft(row, 'TotalTime')) || 0,
+        hours,
         time: Object.fromEntries(
           TIME_KEYS.map((key) => [key, Number(ft(row, TIME_COLUMNS[key])) || 0]),
         ) as Hours,

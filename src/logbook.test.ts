@@ -6,6 +6,7 @@ import {
   arc,
   distanceNm,
   legs,
+  noDrops,
   parseLogbook,
   routes,
   summary,
@@ -187,6 +188,42 @@ test('summary reports the highest field landed at', () => {
   assert.equal(summary(flights, db).highest!.ft, 0)
 })
 
+test('unresolved identifiers and airportless flights are reported, not silently dropped', () => {
+  const drops = noDrops()
+  const flights = parseLogbook(
+    logbook(
+      // Survives, but EMI and DDUBS cost it two stops.
+      '2021-01-01,N1,KIAD,KALB,EMI DDUBS,1.5',
+      // Nothing resolvable: a simulator session, invisible in every total.
+      '2021-01-02,SIM,,,,2.4',
+      // EMI again, on a second flight.
+      '2021-01-03,N1,KALB,KIAD,EMI,1.7',
+    ),
+    db,
+    drops,
+  )
+  assert.equal(flights.length, 2)
+  assert.deepEqual([...drops.identifiers].sort(), [
+    ['DDUBS', 1],
+    ['EMI', 2],
+  ])
+  assert.equal(drops.rows, 1)
+  assert.equal(drops.hours, 2.4)
+})
+
+test('a blank From or To is an empty column, not an unresolved identifier', () => {
+  const drops = noDrops()
+  parseLogbook(logbook('2021-01-01,N1,,KALB,'), db, drops)
+  assert.equal(drops.identifiers.size, 0)
+  assert.equal(drops.rows, 0)
+})
+
+test('an identifier written twice on one flight counts as one flight', () => {
+  const drops = noDrops()
+  parseLogbook(logbook('2021-01-01,N1,KIAD,KALB,EMI EMI'), db, drops)
+  assert.deepEqual([...drops.identifiers], [['EMI', 1]])
+})
+
 test('a file that is not a ForeFlight export is rejected', () => {
   assert.throws(() => parseLogbook('name,value\na,1', db), /Not a ForeFlight logbook export/)
 })
@@ -203,10 +240,18 @@ test('great-circle arc starts and ends at its airports and bows off the straight
 // Counts below were derived independently (see docs/plan.md) before this parser existed.
 test('the reference logbook derives the expected shape', { skip: !process.env.LOGBOOK }, () => {
   const airports: AirportDb = JSON.parse(readFileSync('public/airports.json', 'utf8'))
-  const real = parseLogbook(readFileSync(process.env.LOGBOOK!, 'utf8'), airports)
+  const drops = noDrops()
+  const real = parseLogbook(readFileSync(process.env.LOGBOOK!, 'utf8'), airports, drops)
   const totals = summary(real, airports)
   const legCount = real.reduce((n, f) => n + legs(f).length, 0)
   assert.equal(real.length, 1339) // 1397 rows, 58 with no resolvable airport
+  // The 58 above, now self-checking, plus the hours they take off the Hours total.
+  assert.equal(drops.rows, 58)
+  assert.equal(Math.round(drops.hours * 10) / 10, 27.4)
+  // 5 navaids and fixes, and 5 that look like airports — KISN among them, closed and since
+  // removed from the FAA export, so its leg is simply gone.
+  assert.equal(drops.identifiers.size, 10)
+  assert.equal(drops.identifiers.get('KISN'), 1)
   assert.equal(legCount, 1249)
   assert.equal(routes(real, airports).length, 161)
   assert.equal(airportStats(real).length, 95) // 70 flown to, plus 25 reached only via a Filed Route

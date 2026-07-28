@@ -11,6 +11,7 @@ import {
   IAP,
   legs,
   MIL,
+  noDrops,
   PRIVATE,
   parseLogbook,
   routes,
@@ -39,7 +40,12 @@ const HOUR_LABELS: Record<TimeKey, string> = {
 
 const db = shallowRef<AirportDb>({})
 const flights = shallowRef<Flight[]>([])
+const dropped = shallowRef(noDrops())
 const error = ref('')
+
+// Most frequently written first: the identifier flown ten times is likelier to be a real airport
+// the dataset is missing than a one-off typo.
+const lost = computed(() => [...dropped.value.identifiers].sort((a, b) => b[1] - a[1]))
 
 const from = ref('')
 const to = ref('')
@@ -178,7 +184,9 @@ async function load(event: Event) {
   if (!file) return
   try {
     stop()
-    flights.value = parseLogbook(await file.text(), db.value)
+    const drops = noDrops()
+    flights.value = parseLogbook(await file.text(), db.value, drops)
+    dropped.value = drops
     error.value = ''
     selected.value = null
     minFlights.value = 1
@@ -190,6 +198,7 @@ async function load(event: Event) {
   } catch (e) {
     error.value = (e as Error).message
     flights.value = []
+    dropped.value = noDrops()
   }
 }
 
@@ -338,6 +347,30 @@ watch([flights, db], drawUnvisited)
       <span>Choose ForeFlight logbook…</span>
     </label>
     <p v-if="error" class="error">{{ error }}</p>
+
+    <!-- The map's totals are only as complete as what resolved. Say so rather than understate. -->
+    <details v-if="lost.length || dropped.rows" class="dropped">
+      <summary>
+        Not on the map<template v-if="dropped.rows">
+          — {{ dropped.rows.toLocaleString() }}
+          {{ dropped.rows === 1 ? 'flight' : 'flights' }}</template
+        ><template v-if="lost.length">, {{ lost.length }} unresolved</template>
+      </summary>
+      <p v-if="dropped.rows">
+        {{ dropped.rows.toLocaleString() }} {{ dropped.rows === 1 ? 'flight' : 'flights' }}
+        <template v-if="dropped.hours">({{ hours(dropped.hours) }} h) </template>
+        record no airport — simulator sessions and routeless entries. Absent from every total here.
+      </p>
+      <template v-if="lost.length">
+        <p>
+          {{ lost.length }} {{ lost.length === 1 ? 'identifier' : 'identifiers' }} matched no
+          airport. Navaids and fixes belong here; an airport does not — it means a missing leg.
+        </p>
+        <ul>
+          <li v-for="[id, n] in lost" :key="id">{{ id }}<span v-if="n > 1"> ×{{ n }}</span></li>
+        </ul>
+      </template>
+    </details>
 
     <template v-if="flights.length">
       <fieldset>
@@ -572,6 +605,32 @@ h2 {
 
 .error {
   color: #b91c1c;
+}
+
+.dropped {
+  margin: 10px 0;
+  color: #566;
+  font-size: 12px;
+}
+.dropped summary {
+  cursor: pointer;
+}
+.dropped p {
+  margin: 6px 0;
+}
+.dropped ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dropped li {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #eef1f4;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Own bar along the bottom: starts clear of the filter panel, stops short of the zoom control. */

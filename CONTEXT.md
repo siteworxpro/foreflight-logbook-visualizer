@@ -21,7 +21,7 @@ A physical place with coordinates, resolved from an **Identifier** against the a
 _Avoid_: Field, station, destination
 
 **Unresolved Identifier**:
-An **Identifier** with no matching **Airport** in the dataset — a typo, a navaid, or a field outside dataset coverage. It has no coordinates and is skipped.
+An **Identifier** with no matching **Airport** in the dataset — a typo, a navaid, or a field the dataset never had or has since removed. It has no coordinates and is skipped, but it is counted and shown: only the pilot can tell a navaid, which belongs here, from an airport, which means a lost **Leg**.
 _Avoid_: Invalid airport, bad data
 
 **Filed Route**:
@@ -60,4 +60,4 @@ _Avoid_: Local flight, out-and-back
 
 - **"Times at an airport"** means **Visit** count — how many times the pilot arrived. It does not mean ground dwell time, which the logbook cannot support.
 - **Route** vs **Filed Route** — the logbook's `Route` column is a planned navigation route; a **Route** in this app is a map line between two airports the pilot actually connected. Never use the bare word for the former.
-- Resolution is deliberately approximate. Identifiers that do not resolve are skipped silently, and a **Filed Route** entry is treated as a landing without proof that one occurred. The map is for interest, not for currency or legal record.
+- Resolution is deliberately approximate: a **Filed Route** entry is treated as a landing without proof that one occurred. The map is for interest, not for currency or legal record. Approximate is not the same as silent, though — an **Unresolved Identifier**, and a flight with no resolvable airport at all, are both reported rather than quietly dropped.
