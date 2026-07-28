@@ -13,7 +13,23 @@ import {
   type AirportDb,
   type Flight,
   type Route,
+  TIME_KEYS,
+  type TimeKey,
 } from './logbook'
+
+// A Record, so adding a category to TIME_COLUMNS without labelling it fails to compile.
+// Reading order comes from TIME_KEYS, which is already the order a logbook page runs.
+const HOUR_LABELS: Record<TimeKey, string> = {
+  pic: 'PIC',
+  sic: 'SIC',
+  solo: 'Solo',
+  xc: 'Cross-country',
+  night: 'Night',
+  actual: 'Actual inst',
+  sim: 'Sim inst',
+  dualGiven: 'Dual given',
+  dualReceived: 'Dual received',
+}
 
 const db = shallowRef<AirportDb>({})
 const flights = shallowRef<Flight[]>([])
@@ -72,6 +88,58 @@ const timeline = computed(() => {
 })
 
 const miles = (nm: number) => Math.round(nm * 1.15078).toLocaleString()
+const hours = (h: number) => h.toFixed(1)
+
+const fade = ref(false)
+
+// "Now" is the newest flight in view rather than today's date: filter down to 2008 and every
+// airport would read as ancient, greying the whole map out.
+const newest = computed(() => shown.value.reduce((max, f) => (f.date > max ? f.date : max), ''))
+const lastFlight = computed(() => flights.value.reduce((max, f) => (f.date > max ? f.date : max), ''))
+
+const YEAR_MS = 365.25 * 24 * 3600 * 1000
+
+/** Teal when recently visited, washing out to grey across five years away. */
+function dotColor(last: string) {
+  if (!fade.value) return '#0f766e'
+  const age = (Date.parse(newest.value) - Date.parse(last)) / YEAR_MS
+  const t = Math.min(1, Math.max(0, age / 5))
+  return `color-mix(in oklab, #0f766e, #94a3b8 ${Math.round(t * 100)}%)`
+}
+
+// An empty date box means unbounded, exactly as byDateAndType reads it.
+const inRange = (year: string) =>
+  (!from.value || year >= from.value.slice(0, 4)) && (!to.value || year <= to.value.slice(0, 4))
+
+const playing = ref(false)
+let timer: ReturnType<typeof setInterval> | undefined
+
+function stop() {
+  playing.value = false
+  clearInterval(timer)
+}
+
+// Holds the start date and walks the end date forward, so years pile up rather than scrub past.
+function play() {
+  if (playing.value) return stop()
+  const years = timeline.value.map((y) => y.year)
+  if (!years.length) return
+  from.value = `${years[0]}-01-01`
+  to.value = `${years[0]}-12-31`
+  playing.value = true
+  let i = 0
+  timer = setInterval(() => {
+    // Finish on the last flight rather than 31 December, so the range matches a freshly loaded file.
+    if (++i >= years.length) {
+      to.value = lastFlight.value
+      return stop()
+    }
+    to.value = `${years[i]}-12-31`
+  }, 700)
+}
+
+// A category the pilot never logged is noise, not a zero worth reading.
+const breakdown = computed(() => TIME_KEYS.filter((key) => totals.value.time[key] >= 0.05))
 
 function selectRoute(a: string, b: string) {
   const route = allRoutes.value.find((r) => r.a === a && r.b === b)
@@ -88,6 +156,7 @@ async function load(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
   try {
+    stop()
     flights.value = parseLogbook(await file.text(), db.value)
     error.value = ''
     selected.value = null
@@ -135,13 +204,13 @@ function draw() {
     L.marker(at(stat.id), {
       icon: L.divIcon({
         className: 'airport-dot',
-        html: `<span style="width:${size}px;height:${size}px">${stat.visits}</span>`,
+        html: `<span style="width:${size}px;height:${size}px;background:${dotColor(stat.last)}">${stat.visits}</span>`,
         iconSize: [size, size],
       }),
       zIndexOffset: stat.visits,
     })
       .on('click', () => (selected.value = { kind: 'airport', id: stat.id }))
-      .bindTooltip(`${stat.id} — ${name(stat.id)} · ${stat.visits} visits`)
+      .bindTooltip(`${stat.id} — ${name(stat.id)} · ${stat.visits} visits · last ${stat.last}`)
       .addTo(airportLayer)
   }
 }
@@ -149,16 +218,49 @@ function draw() {
 onMounted(async () => {
   map = L.map('map', { zoomControl: false }).setView([39.5, -95], 4)
   L.control.zoom({ position: 'bottomright' }).addTo(map)
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '© OpenStreetMap contributors © CARTO',
-    maxZoom: 18,
-  }).addTo(map)
+
+  // Light is the default because the arcs read best on it; the others answer "what was down there".
+  const basemaps = {
+    Light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap contributors © CARTO',
+      maxZoom: 18,
+    }),
+    Streets: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors',
+      maxZoom: 19,
+    }),
+    Terrain: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenTopoMap (CC-BY-SA) © OpenStreetMap contributors',
+      maxZoom: 17,
+    }),
+    Satellite: L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution: 'Esri, Maxar, Earthstar Geographics', maxZoom: 19 },
+    ),
+  }
+  basemaps.Light.addTo(map)
+
+  // The FAA cache only holds zoom 8–12, so the sectional is an overlay rather than a basemap:
+  // zoom out past 8 and it drops away, leaving whatever basemap is underneath.
+  const overlays = {
+    'VFR sectional': L.tileLayer(
+      'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/VFR_Sectional/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: 'FAA Aeronautical Information Services',
+        minZoom: 8,
+        maxNativeZoom: 12,
+        maxZoom: 18,
+      },
+    ),
+  }
+  L.control.layers(basemaps, overlays, { position: 'bottomright' }).addTo(map)
+
   routeLayer.addTo(map)
   airportLayer.addTo(map)
   db.value = await (await fetch('/airports.json')).json()
 })
 
-watch([shownRoutes, stats], draw)
+watch([shownRoutes, stats, fade], draw)
 </script>
 
 <template>
@@ -174,37 +276,6 @@ watch([shownRoutes, stats], draw)
     <p v-if="error" class="error">{{ error }}</p>
 
     <template v-if="flights.length">
-      <p class="summary">
-        {{ shown.length }} flights · {{ legCount }} legs · {{ shownRoutes.length }} routes ·
-        {{ stats.length }} airports
-      </p>
-
-      <div class="totals">
-        <strong>{{ miles(totals.nm) }} mi</strong>
-        <span>{{ (totals.nm / 21639).toFixed(1) }}× around the world</span>
-        <strong>{{ totals.states.length }} states</strong>
-        <span :title="totals.states.join(' ')">{{ totals.states.join(' ') }}</span>
-        <template v-if="totals.longest">
-          <strong>{{ Math.round(totals.longest.nm) }} nm</strong>
-          <span :title="`longest leg, flown ${totals.longest.date}`">
-            longest —
-            <button @click="selectRoute(totals.longest.a, totals.longest.b)">
-              {{ totals.longest.a }}–{{ totals.longest.b }}
-            </button>
-          </span>
-        </template>
-      </div>
-
-      <ol class="timeline">
-        <li v-for="y in timeline" :key="y.year">
-          <button
-            :style="{ height: `${y.height}%` }"
-            :title="`${y.year} — ${y.n} flights`"
-            @click="((from = `${y.year}-01-01`), (to = `${y.year}-12-31`))"
-          ></button>
-        </li>
-      </ol>
-
       <fieldset>
         <legend>Dates</legend>
         <input type="date" v-model="from" />
@@ -244,7 +315,63 @@ watch([shownRoutes, stats], draw)
         <legend>Flown at least {{ minFlights }}×</legend>
         <input type="range" min="1" :max="busiestRoute" v-model.number="minFlights" />
       </fieldset>
+
+      <label class="toggle">
+        <input type="checkbox" v-model="fade" />
+        Fade airports by years since last visit
+      </label>
     </template>
+  </aside>
+
+  <aside v-if="flights.length" class="panel stats">
+    <div class="row">
+      <dl>
+        <div><dt>Hours</dt><dd>{{ hours(totals.hours) }}</dd></div>
+        <div><dt>Flights</dt><dd>{{ shown.length.toLocaleString() }}</dd></div>
+        <div><dt>Legs</dt><dd>{{ legCount.toLocaleString() }}</dd></div>
+        <div><dt>Routes</dt><dd>{{ shownRoutes.length }}</dd></div>
+        <div><dt>Airports</dt><dd>{{ stats.length }}</dd></div>
+        <div :title="`${(totals.nm / 21639).toFixed(1)}× around the world`">
+          <dt>Miles</dt>
+          <dd>{{ miles(totals.nm) }}</dd>
+        </div>
+        <div :title="totals.states.join(' ')">
+          <dt>States</dt>
+          <dd>{{ totals.states.length }}</dd>
+        </div>
+        <div v-if="totals.longest" :title="`longest leg, flown ${totals.longest.date}`">
+          <dt>Longest</dt>
+          <dd>
+            <button @click="selectRoute(totals.longest.a, totals.longest.b)">
+              {{ Math.round(totals.longest.nm) }} nm
+            </button>
+          </dd>
+        </div>
+      </dl>
+
+      <button class="play" :title="playing ? 'Stop' : 'Play through the years'" @click="play">
+        {{ playing ? '■' : '▶' }}
+      </button>
+
+      <ol class="timeline">
+        <li v-for="y in timeline" :key="y.year">
+          <button
+            :class="{ lit: inRange(y.year) }"
+            :style="{ height: `${y.height}%` }"
+            :title="`${y.year} — ${y.n} flights`"
+            @click="((from = `${y.year}-01-01`), (to = `${y.year}-12-31`))"
+          ></button>
+        </li>
+      </ol>
+    </div>
+
+    <!-- Categories overlap — a night cross-country is counted in both — so they never sum to Hours. -->
+    <dl v-if="breakdown.length" class="breakdown">
+      <div v-for="key in breakdown" :key="key">
+        <dt>{{ HOUR_LABELS[key] }}</dt>
+        <dd>{{ hours(totals.time[key]) }}</dd>
+      </div>
+    </dl>
   </aside>
 
   <aside v-if="selected" class="panel detail">
@@ -369,38 +496,68 @@ h2 {
 .error {
   color: #b91c1c;
 }
-.summary {
-  margin: 10px 0;
-  color: #566;
-  font-size: 12px;
-}
 
-.totals {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 3px 8px;
-  align-items: baseline;
-  margin-bottom: 10px;
-  font-size: 11px;
-  color: #566;
+/* Own bar along the bottom: starts clear of the filter panel, stops short of the zoom control. */
+.stats {
+  top: auto;
+  bottom: 24px;
+  left: 284px;
+  right: auto;
+  width: auto;
+  max-width: calc(100% - 344px);
+  max-height: none;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.totals strong {
-  font-size: 13px;
+.stats .row {
+  display: flex;
+  align-items: flex-end;
+  gap: 22px;
+}
+.stats dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+}
+.stats dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.stats dd {
+  font-size: 20px;
+  font-weight: 600;
   color: #0f766e;
   white-space: nowrap;
 }
-.totals span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.totals button {
+.stats button {
   padding: 0;
   border: 0;
   background: none;
-  color: #0f766e;
+  color: inherit;
   font: inherit;
   cursor: pointer;
+}
+.stats .timeline {
+  flex: none;
+  width: 200px;
+  height: 40px;
+  margin: 0;
+}
+
+.stats .breakdown {
+  gap: 2px 18px;
+  padding-top: 9px;
+  border-top: 1px solid #e6eaee;
+}
+.stats .breakdown dt {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.stats .breakdown dd {
+  font-size: 13px;
 }
 
 .timeline {
@@ -427,8 +584,27 @@ h2 {
   opacity: 0.55;
   cursor: pointer;
 }
-.timeline button:hover {
+.timeline button:hover,
+.timeline button.lit {
   opacity: 1;
+}
+
+.play {
+  width: 26px;
+  height: 26px;
+  border: 1px solid #dfe3e7;
+  border-radius: 50%;
+  background: #fff;
+  color: #0f766e;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.toggle {
+  display: block;
+  color: #566;
+  font-size: 12px;
 }
 
 h3 {

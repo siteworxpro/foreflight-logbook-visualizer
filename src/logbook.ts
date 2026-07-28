@@ -8,11 +8,33 @@ export type AirportRecord = [number, number, string, string, string]
 /** Values are either an airport record or a string aliasing the canonical (ICAO) identifier. */
 export type AirportDb = Record<string, AirportRecord | string>
 
+/** The hour columns ForeFlight breaks out beside TotalTime, in the order a logbook page reads. */
+const TIME_COLUMNS = {
+  pic: 'PIC',
+  sic: 'SIC',
+  solo: 'Solo',
+  xc: 'CrossCountry',
+  night: 'Night',
+  actual: 'ActualInstrument',
+  sim: 'SimulatedInstrument',
+  dualGiven: 'DualGiven',
+  dualReceived: 'DualReceived',
+} as const
+
+export type TimeKey = keyof typeof TIME_COLUMNS
+export type Hours = Record<TimeKey, number>
+
+export const TIME_KEYS = Object.keys(TIME_COLUMNS) as TimeKey[]
+
+const noHours = (): Hours => Object.fromEntries(TIME_KEYS.map((k) => [k, 0])) as Hours
+
 export type Flight = {
   date: string
   tail: string
   type: string
   hours: number
+  /** Hours by category. These overlap — a night cross-country counts in both. */
+  time: Hours
   /** Resolved airports in order of travel, origin first. Drives Legs. */
   seq: string[]
   /** Resolved airports the pilot landed at: route stops plus the destination. Drives Visits. */
@@ -98,6 +120,9 @@ export function parseLogbook(text: string, db: AirportDb): Flight[] {
         tail,
         type: types.get(tail) ?? '',
         hours: Number(ft(row, 'TotalTime')) || 0,
+        time: Object.fromEntries(
+          TIME_KEYS.map((key) => [key, Number(ft(row, TIME_COLUMNS[key])) || 0]),
+        ) as Hours,
         seq,
         visits,
         approaches,
@@ -187,6 +212,8 @@ export function airportStats(flights: Flight[]): AirportStat[] {
 
 export type Summary = {
   nm: number
+  hours: number
+  time: Hours
   byType: [string, number][]
   longest: (Route & { date: string }) | null
   states: string[]
@@ -197,11 +224,15 @@ export function summary(flights: Flight[], db: AirportDb): Summary {
   const byType = new Map<string, number>()
   const perYear = new Map<string, number>()
   const states = new Set<string>()
+  const time = noHours()
   let nm = 0
+  let hours = 0
   let longest: (Route & { date: string }) | null = null
 
   for (const f of flights) {
     perYear.set(f.date.slice(0, 4), (perYear.get(f.date.slice(0, 4)) ?? 0) + 1)
+    hours += f.hours
+    for (const key of TIME_KEYS) time[key] += f.time[key]
     for (const id of f.visits) {
       const state = airport(id, db)?.[4]
       if (state) states.add(state)
@@ -220,6 +251,8 @@ export function summary(flights: Flight[], db: AirportDb): Summary {
 
   return {
     nm,
+    hours,
+    time,
     byType: [...byType].sort((x, y) => y[1] - x[1]),
     longest,
     states: [...states].sort(),

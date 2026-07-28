@@ -31,7 +31,7 @@ const logbook = (...flights: string[]) =>
     'N1,P28A,',
     '',
     'Flights Table ,,,,',
-    'Date,AircraftID,From,To,Route,TotalTime,Approach1',
+    'Date,AircraftID,From,To,Route,TotalTime,Approach1,PIC,Night,CrossCountry,ActualInstrument,DualReceived',
     ...flights,
   ].join('\n')
 
@@ -119,6 +119,21 @@ test('summary totals distance, states and years', () => {
   assert.ok(Math.abs(s.nm - 2 * distanceNm('KIAD', 'KALB', db)) < 0.01)
   // Recorded as a sorted pair so it matches the Route between the same airports.
   assert.deepEqual([s.longest!.a, s.longest!.b], ['KALB', 'KIAD'])
+})
+
+test('summary totals hours by category, and categories may overlap', () => {
+  const flights = parseLogbook(
+    logbook('2021-01-01,N1,KIAD,KALB,,1.5,,1.5,0.4,1.5,,', '2021-01-02,N1,KALB,KIAD,,1.7,,1.7,,,0.6,'),
+    db,
+  )
+  const s = summary(flights, db)
+  assert.equal(s.hours, 3.2)
+  assert.equal(s.time.pic, 3.2)
+  // The 0.4 night hour is also inside the 1.5 cross-country hours — the parts overstate the whole.
+  assert.equal(s.time.night, 0.4)
+  assert.equal(s.time.xc, 1.5)
+  assert.equal(s.time.actual, 0.6)
+  assert.equal(s.time.dualReceived, 0)
 })
 
 test('a flight with no resolvable airports is dropped', () => {
