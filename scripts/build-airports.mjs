@@ -9,10 +9,25 @@ const OUT = 'public/airports.json'
 const { features } = JSON.parse(readFileSync(SOURCE, 'utf8'))
 const airports = {}
 
+// MIL_CODE is a string; PRIVATEUSE and IAPEXISTS are numbers. Comparing either to '1' silently
+// flags nothing, so both are read for truthiness.
+const flagsOf = (p) =>
+  (p.MIL_CODE === 'MIL' || p.MIL_CODE === 'ALL' ? 1 : 0) |
+  (p.PRIVATEUSE ? 2 : 0) |
+  (p.IAPEXISTS ? 4 : 0)
+
 for (const { properties: p, geometry } of features) {
   if (p.TYPE_CODE !== 'AD') continue // skip heliports, seaplane bases, ultralight fields
   const [lon, lat] = geometry.coordinates
-  const record = [+lat.toFixed(5), +lon.toFixed(5), p.NAME ?? '', p.SERVCITY ?? '', p.STATE ?? '']
+  const record = [
+    +lat.toFixed(5),
+    +lon.toFixed(5),
+    p.NAME ?? '',
+    p.SERVCITY ?? '',
+    p.STATE ?? '',
+    Math.round(p.ELEVATION ?? 0),
+    flagsOf(p),
+  ]
   // Logbooks mix ICAO (KIAD) and FAA (3CK) identifiers. One airport must stay one airport,
   // so the ICAO form is canonical and the FAA form becomes a string alias pointing at it.
   const canonical = p.ICAO_ID || p.IDENT

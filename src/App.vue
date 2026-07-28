@@ -6,10 +6,16 @@ import {
   airport,
   airportStats,
   arc,
+  elevation,
+  flags,
+  IAP,
   legs,
+  MIL,
+  PRIVATE,
   parseLogbook,
   routes,
   summary,
+  unvisited,
   type AirportDb,
   type Flight,
   type Route,
@@ -47,7 +53,22 @@ type Selection =
 const selected = ref<Selection | null>(null)
 
 const name = (id: string) => airport(id, db.value)?.[2] || id
-const place = (id: string) => airport(id, db.value)?.slice(3).filter(Boolean).join(', ') ?? ''
+// Named indices rather than a slice: the record grew an elevation and a flags field on the end.
+const place = (id: string) => {
+  const a = airport(id, db.value)
+  return a ? [a[3], a[4]].filter(Boolean).join(', ') : ''
+}
+const feet = (id: string) => {
+  const a = airport(id, db.value)
+  return a ? elevation(a).toLocaleString() : ''
+}
+
+// Military fields are also flagged private-use, so the stronger label wins.
+const badge = (id: string) => {
+  const a = airport(id, db.value)
+  const bits = a ? flags(a) : 0
+  return bits & MIL ? 'Military' : bits & PRIVATE ? 'Private use' : ''
+}
 const at = (id: string) => {
   const a = airport(id, db.value)!
   return [a[0], a[1]] as [number, number]
@@ -175,11 +196,45 @@ async function load(event: Event) {
 let map: L.Map
 const routeLayer = L.layerGroup()
 const airportLayer = L.layerGroup()
+// A FeatureGroup, not a LayerGroup: only a FeatureGroup republishes its members' events, which is
+// what lets one hover handler stand in for five thousand bound tooltips.
+const unvisitedLayer = L.featureGroup()
+let dots: L.Canvas
 
 function fit() {
   const points = stats.value.map((s) => at(s.id))
   if (points.length) map.fitBounds(L.latLngBounds(points).pad(0.1))
 }
+
+/**
+ * Every public-use airport the pilot has never landed at, as canvas dots — the map's answer to
+ * "where haven't I been". Visited airports are DOM divIcons, which is comfortable at a few hundred
+ * and hopeless at five thousand, so this layer goes to a canvas renderer in its own pane.
+ */
+function drawUnvisited() {
+  unvisitedLayer.clearLayers()
+  const seen = new Set(flights.value.flatMap((f) => f.seq))
+  for (const [id, a] of unvisited(db.value, seen)) {
+    const dot = L.circleMarker([a[0], a[1]], {
+      renderer: dots,
+      pane: 'unvisited',
+      radius: 2,
+      weight: 0,
+      // A published approach means somewhere you could actually go on an instrument day.
+      fillColor: flags(a) & IAP ? '#64748b' : '#cbd5e1',
+      fillOpacity: 0.9,
+    })
+    Object.assign(dot, { id }).addTo(unvisitedLayer)
+  }
+}
+
+// Bound once on the group: bindTooltip builds its Tooltip immediately, and five thousand of those
+// is exactly the cost the canvas renderer was chosen to avoid. Build on first hover instead.
+unvisitedLayer.on('mouseover', (e) => {
+  const dot = e.propagatedFrom as L.CircleMarker & { id: string }
+  if (!dot.getTooltip()) dot.bindTooltip(`${dot.id} — ${name(dot.id)} · ${feet(dot.id)} ft`)
+  dot.openTooltip()
+})
 
 function draw() {
   routeLayer.clearLayers()
@@ -219,6 +274,10 @@ onMounted(async () => {
   map = L.map('map', { zoomControl: false }).setView([39.5, -95], 4)
   L.control.zoom({ position: 'bottomright' }).addTo(map)
 
+  // Below overlayPane (400), so routes and visited airports always sit on top of the grey field.
+  map.createPane('unvisited').style.zIndex = '350'
+  dots = L.canvas({ pane: 'unvisited', padding: 0.5 })
+
   // Light is the default because the arcs read best on it; the others answer "what was down there".
   const basemaps = {
     Light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
@@ -243,6 +302,8 @@ onMounted(async () => {
   // The FAA cache only holds zoom 8–12, so the sectional is an overlay rather than a basemap:
   // zoom out past 8 and it drops away, leaving whatever basemap is underneath.
   const overlays = {
+    // Off by default: the map's subject is where the pilot has been, not where they have not.
+    'Unvisited airports': unvisitedLayer,
     'VFR sectional': L.tileLayer(
       'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/VFR_Sectional/MapServer/tile/{z}/{y}/{x}',
       {
@@ -261,6 +322,9 @@ onMounted(async () => {
 })
 
 watch([shownRoutes, stats, fade], draw)
+// Keyed on the whole logbook, not the filtered view: rebuilding five thousand dots on every
+// timeline tick would stutter, and "never been there" does not change when you scrub a year.
+watch([flights, db], drawUnvisited)
 </script>
 
 <template>
@@ -347,6 +411,14 @@ watch([shownRoutes, stats, fade], draw)
             </button>
           </dd>
         </div>
+        <div v-if="totals.highest" :title="`${name(totals.highest.id)} — highest field landed at`">
+          <dt>Highest</dt>
+          <dd>
+            <button @click="selected = { kind: 'airport', id: totals.highest.id }">
+              {{ totals.highest.ft.toLocaleString() }} ft
+            </button>
+          </dd>
+        </div>
       </dl>
 
       <button class="play" :title="playing ? 'Stop' : 'Play through the years'" @click="play">
@@ -379,8 +451,13 @@ watch([shownRoutes, stats, fade], draw)
 
     <template v-if="detail">
       <h2>{{ detail.id }}</h2>
-      <p class="sub">{{ name(detail.id) }}<br />{{ place(detail.id) }}</p>
+      <p class="sub">
+        {{ name(detail.id) }}<br />{{ place(detail.id) }}
+        <span v-if="badge(detail.id)" class="badge">{{ badge(detail.id) }}</span>
+      </p>
       <dl>
+        <dt>Elevation</dt>
+        <dd>{{ feet(detail.id) }} ft</dd>
         <dt>Visits</dt>
         <dd>{{ detail.visits }}</dd>
         <dt>First</dt>
@@ -651,6 +728,16 @@ fieldset select {
 .sub {
   margin: 4px 0 12px;
   color: #566;
+}
+.badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #eef1f4;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
 
 dl {

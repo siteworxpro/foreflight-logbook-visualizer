@@ -3,10 +3,22 @@
 // TypeCode) precedes PilotComments at index 51, the only quoted column. Switch to a
 // quote-aware split if a column past 50 is ever needed.
 
-/** `[lat, lon, name, city, state]` — the shape written by scripts/build-airports.mjs */
-export type AirportRecord = [number, number, string, string, string]
+/**
+ * `[lat, lon, name, city, state, elevationFt, flags]` — the shape written by
+ * scripts/build-airports.mjs. The last two are optional so a hand-written record (a test
+ * fixture) can stop at state; readers go through `elevation` and `flags`.
+ */
+export type AirportRecord = [number, number, string, string, string, number?, number?]
 /** Values are either an airport record or a string aliasing the canonical (ICAO) identifier. */
 export type AirportDb = Record<string, AirportRecord | string>
+
+/** Bits packed into an airport record's flags. */
+export const MIL = 1
+export const PRIVATE = 2
+export const IAP = 4
+
+export const elevation = (a: AirportRecord) => a[5] ?? 0
+export const flags = (a: AirportRecord) => a[6] ?? 0
 
 /** The hour columns ForeFlight breaks out beside TotalTime, in the order a logbook page reads. */
 const TIME_COLUMNS = {
@@ -161,6 +173,29 @@ export function routes(flights: Flight[], db: AirportDb = {}): Route[] {
   return [...found.values()]
 }
 
+/**
+ * Public-use airports the pilot has never *been to* — the "where haven't I been" layer.
+ *
+ * Deliberately a wider set than Visits: pass every airport in every flight's `seq`, origins
+ * included. A field you departed from but never logged an arrival at is somewhere you have stood,
+ * so calling it unvisited would be a lie the pilot can see. Such an airport draws no dot at all,
+ * which is the right answer for a place the logbook only half-records.
+ *
+ * Derived from the whole logbook rather than the filtered view on purpose: the question is about
+ * a career, and a layer that flickered while scrubbing years would answer nothing. Private-use
+ * fields are excluded, which is most of the dataset — they are farm strips, not destinations.
+ */
+export function unvisited(db: AirportDb, beenTo: Set<string>): [string, AirportRecord][] {
+  const out: [string, AirportRecord][] = []
+  for (const id in db) {
+    const rec = db[id]
+    // A string value is an alias; skipping it keeps one airport as one dot.
+    if (typeof rec === 'string' || beenTo.has(id) || flags(rec) & PRIVATE) continue
+    out.push([id, rec])
+  }
+  return out
+}
+
 /** Great-circle distance in nautical miles. Zero when either airport is unknown. */
 export function distanceNm(a: string, b: string, db: AirportDb): number {
   const [from, to] = [airport(a, db), airport(b, db)]
@@ -216,6 +251,8 @@ export type Summary = {
   time: Hours
   byType: [string, number][]
   longest: (Route & { date: string }) | null
+  /** Highest airport landed at, by field elevation. */
+  highest: { id: string; ft: number } | null
   states: string[]
   perYear: [string, number][]
 }
@@ -228,14 +265,18 @@ export function summary(flights: Flight[], db: AirportDb): Summary {
   let nm = 0
   let hours = 0
   let longest: (Route & { date: string }) | null = null
+  let highest: { id: string; ft: number } | null = null
 
   for (const f of flights) {
     perYear.set(f.date.slice(0, 4), (perYear.get(f.date.slice(0, 4)) ?? 0) + 1)
     hours += f.hours
     for (const key of TIME_KEYS) time[key] += f.time[key]
     for (const id of f.visits) {
-      const state = airport(id, db)?.[4]
-      if (state) states.add(state)
+      const a = airport(id, db)
+      if (!a) continue
+      if (a[4]) states.add(a[4])
+      // Below sea level is a real elevation (L06 sits at −210 ft), so seed from nothing, not zero.
+      if (!highest || elevation(a) > highest.ft) highest = { id, ft: elevation(a) }
     }
     for (const [a, b] of legs(f)) {
       const d = distanceNm(a, b, db)
@@ -255,6 +296,7 @@ export function summary(flights: Flight[], db: AirportDb): Summary {
     time,
     byType: [...byType].sort((x, y) => y[1] - x[1]),
     longest,
+    highest,
     states: [...states].sort(),
     perYear: [...perYear].sort(),
   }

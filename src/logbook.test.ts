@@ -9,6 +9,7 @@ import {
   parseLogbook,
   routes,
   summary,
+  unvisited,
   type AirportDb,
   type AirportRecord,
 } from './logbook.ts'
@@ -152,6 +153,38 @@ test('airport stats carry visit count and date span', () => {
     first: '2021-01-01',
     last: '2022-01-01',
   })
+})
+
+test('unvisited skips airports been to, aliases and private-use fields', () => {
+  // KCJR is private-use (flag 2), KCHO has been landed at, MRB is an alias for KMRB.
+  const field: AirportDb = {
+    ...db,
+    KCJR: [38.52, -77.85, 'Culpeper Rgnl', 'Culpeper', 'VA', 300, 2],
+    KLXV: [39.22, -106.32, 'Lake County', 'Leadville', 'CO', 9934, 4],
+  }
+  const ids = unvisited(field, new Set(['KCHO'])).map(([id]) => id)
+  assert.deepEqual(ids.sort(), ['KALB', 'KIAD', 'KLXV', 'KMRB'])
+})
+
+test('an airport only ever departed from is not offered as somewhere you have never been', () => {
+  // One flight out of KIAD and never back: KIAD is no Visit, but the pilot was plainly there.
+  const [f] = parseLogbook(logbook('2021-01-01,N1,KIAD,KALB,'), db)
+  assert.deepEqual(f.visits, ['KALB'])
+  // The map builds its set from seq, not visits, which is what keeps KIAD out of the grey layer.
+  const ids = unvisited(db, new Set(f.seq)).map(([id]) => id)
+  assert.ok(!ids.includes('KIAD'), 'a departure airport is somewhere you have been')
+  assert.ok(ids.includes('KCJR'), 'an airport never touched is still offered')
+})
+
+test('summary reports the highest field landed at', () => {
+  const field: AirportDb = { ...db, KLXV: [39.22, -106.32, 'Lake County', 'Leadville', 'CO', 9934, 4] }
+  const flights = parseLogbook(
+    logbook('2021-01-01,N1,KIAD,KLXV,,4.5', '2021-01-02,N1,KLXV,KIAD,,4.5'),
+    field,
+  )
+  assert.deepEqual(summary(flights, field).highest, { id: 'KLXV', ft: 9934 })
+  // A fixture that stops at state has no elevation, and must not out-rank a real one.
+  assert.equal(summary(flights, db).highest!.ft, 0)
 })
 
 test('a file that is not a ForeFlight export is rejected', () => {
