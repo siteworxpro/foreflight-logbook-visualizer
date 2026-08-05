@@ -50,7 +50,7 @@ jobs:
             -H 'Sec-Fetch-Mode: navigate' \
             -H 'Sec-Fetch-Site: same-site' \
             -H 'Sec-Fetch-User: ?1' \
-            -H 'Priority: u=0, i'
+            -H 'Priority: u=0, i' \
             -o Airports.geojson
           echo "⬇️ Installing dependencies (production only)..."
           npm i --no-dev
