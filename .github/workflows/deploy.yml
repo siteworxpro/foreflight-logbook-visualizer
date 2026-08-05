@@ -35,8 +35,26 @@ jobs:
 
       - name: "📦 Install dependencies & Build (js) 🔧"
         run: |
+          echo "📦 Downloading FAA Airport GeoJSON..."
+          curl 'https://hub.arcgis.com/api/v3/datasets/e747ab91a11045e8b3f8a3efd093d3b5_0/downloads/data?format=geojson&spatialRefId=4326&where=1%3D1' \
+            --compressed \
+            -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0' \
+            -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+            -H 'Accept-Language: en-US,en;q=0.9' \
+            -H 'Accept-Encoding: gzip, deflate, br, zstd' \
+            -H 'Sec-GPC: 1' \
+            -H 'Connection: keep-alive' \
+            -H 'Referer: https://adds-faa.opendata.arcgis.com/' \
+            -H 'Upgrade-Insecure-Requests: 1' \
+            -H 'Sec-Fetch-Dest: document' \
+            -H 'Sec-Fetch-Mode: navigate' \
+            -H 'Sec-Fetch-Site: same-site' \
+            -H 'Sec-Fetch-User: ?1' \
+            -H 'Priority: u=0, i'
           echo "⬇️ Installing dependencies (production only)..."
           npm i --no-dev
+          echo "🌎 Building Airport Data"
+          npm run airports
           echo "🏗️ Building site..."
           npm run build
           echo "✅ Build complete"
@@ -45,7 +63,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: "📤 Upload artifact (dist) — ready for Pages"
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: './dist'
 
