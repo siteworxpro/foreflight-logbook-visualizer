@@ -327,7 +327,7 @@ onMounted(async () => {
 
   routeLayer.addTo(map)
   airportLayer.addTo(map)
-  db.value = await (await fetch('/airports.json')).json()
+  db.value = await (await fetch('airports.json')).json()
 })
 
 watch([shownRoutes, stats, fade], draw)
