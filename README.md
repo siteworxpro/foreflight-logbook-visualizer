@@ -5,6 +5,8 @@ Maps a ForeFlight logbook: where you have flown, and how often.
 Pick your logbook CSV and it renders in the browser — one weighted line per airport pair, one numbered dot per airport,
 filtered by date, aircraft type, or how often a route was flown. The file never leaves your machine.
 
+[https://siteworxpro.github.io/foreflight-logbook-visualizer/](https://siteworxpro.github.io/foreflight-logbook-visualizer/)
+
 ```sh
 npm install
 npm run dev
