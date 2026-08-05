@@ -27,6 +27,12 @@ jobs:
         with:
           node-version: '25'
 
+      - name: 🪄 Update base path in config
+        run: |
+          echo "🔍 Updating base path in config..."
+          sed -i "s|base: '/'|base: '/foreflight-logbook-visualizer/'|" vite.config.ts
+          echo "✅ Base path updated"
+
       - name: "📦 Install dependencies & Build (js) 🔧"
         run: |
           echo "⬇️ Installing dependencies (production only)..."
@@ -34,12 +40,6 @@ jobs:
           echo "🏗️ Building site..."
           npm run build
           echo "✅ Build complete"
-
-      - name: 🪄 Update base path in config
-        run: |
-          echo "🔍 Updating base path in config..."
-          sed -i "s|base: '/'|base: '/foreflight-logbook-visualizer/'|" js/vite.config.ts
-          echo "✅ Base path updated"
 
       - name: "⚙️ Setup GitHub Pages"
         uses: actions/configure-pages@v5
